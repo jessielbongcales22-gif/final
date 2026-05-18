@@ -1,5 +1,5 @@
 // src/api/client.ts
-const API_URL = import.meta.env.VITE_API_URL || 'https://your-backend.com/api';
+const API_URL = import.meta.env.VITE_API_URL || 'https://your-backend-domain.com/api';
 
 async function request(endpoint: string, options: RequestInit = {}) {
   const token = localStorage.getItem('wm_token');
