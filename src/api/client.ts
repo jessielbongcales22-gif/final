@@ -2,6 +2,12 @@
 const API_URL = import.meta.env.VITE_API_URL || 'https://your-backend-domain.com/api';
 
 export const USE_API = true;
+export const apiGetUsers = () => request('/users');
+export const apiCreateUser = (data: object) => request('/users', { method: 'POST', body: JSON.stringify(data) });
+export const apiUpdateUserRole = (id: string, role: string) =>
+  request(`/users/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
+export const apiDeleteUser = (id: string) => request(`/users/${id}`, { method: 'DELETE' });
+
 
 async function request(endpoint: string, options: RequestInit = {}) {
   const token = localStorage.getItem('wm_token');
