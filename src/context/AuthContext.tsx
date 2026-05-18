@@ -1,53 +1,122 @@
-// src/context/authContext.tsx
-import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+// src/context/AuthContext.tsx
+import { createContext, useContext, useState, ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  apiLogin,
+  apiRegister,
+  apiVerifyOTP,
+} from '../api/client';
 
-interface AuthContextType {
-  user: any | null;
-  token: string | null;
-  setUser: (user: any) => void;
-  setToken: (token: string) => void;
+type User = {
+  id: number;
+  name: string;
+  email: string;
+  role: 'admin' | 'staff' | string;
+};
+
+type AuthContextType = {
+  user: User | null;
+  loading: boolean;
+  error: string | null;
+  login: (email: string, password: string) => Promise<void>;
+  register: (data: object) => Promise<void>;
+  verifyOTP: (email: string, code: string) => Promise<void>;
   logout: () => void;
-}
+};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [user, setUserState] = useState<any | null>(() => {
-    const saved = localStorage.getItem('wm_user');
-    return saved ? JSON.parse(saved) : null;
-  });
-
-  const [token, setTokenState] = useState<string | null>(() => {
-    return localStorage.getItem('wm_token') || null;
-  });
-
-  const setUser = (u: any) => {
-    setUserState(u);
-    localStorage.setItem('wm_user', JSON.stringify(u));
-  };
-
-  const setToken = (t: string) => {
-    setTokenState(t);
-    localStorage.setItem('wm_token', t);
-  };
-
-  const logout = () => {
-    setUserState(null);
-    setTokenState(null);
-    localStorage.removeItem('wm_user');
-    localStorage.removeItem('wm_token');
-    window.location.href = '/login';
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, token, setUser, setToken, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
-
-export const useAuth = (): AuthContextType => {
+export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) throw new Error('useAuth must be used within AuthProvider');
   return context;
+};
+
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
+
+  const login = async (email: string, password: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiLogin(email, password);
+      if (res.success) {
+        setUser(res.user);
+        localStorage.setItem('wm_token', res.token || '');
+        localStorage.setItem('wm_user', JSON.stringify(res.user));
+
+        // Redirect based on role
+        if (res.user.role === 'admin') navigate('/dashboard/admin');
+        else if (res.user.role === 'staff') navigate('/dashboard/staff');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const register = async (data: object) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiRegister(data);
+      if (!res.success) throw new Error(res.message || 'Registration failed');
+    } catch (err: any) {
+      setError(err.message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyOTP = async (email: string, code: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiVerifyOTP({ email, code });
+      if (res.success && res.user) {
+        setUser(res.user);
+        localStorage.setItem('wm_user', JSON.stringify(res.user));
+        localStorage.setItem('wm_token', res.token || '');
+
+        // Redirect based on role
+        if (res.user.role === 'admin') navigate('/dashboard/admin');
+        else if (res.user.role === 'staff') navigate('/dashboard/staff');
+      } else {
+        throw new Error(res.message || 'Invalid OTP');
+      }
+    } catch (err: any) {
+      setError(err.message || 'OTP verification failed');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const logout = () => {
+    setUser(null);
+    localStorage.removeItem('wm_user');
+    localStorage.removeItem('wm_token');
+    navigate('/');
+  };
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        error,
+        login,
+        register,
+        verifyOTP,
+        logout,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
 };
