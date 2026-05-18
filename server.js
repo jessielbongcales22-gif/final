@@ -1,3 +1,4 @@
+// server.js
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -9,50 +10,78 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-// MySQL pool
+// MySQL pool connection to Aiven
 const pool = mysql.createPool({
   host: process.env.MYSQL_HOST,
-  port: Number(process.env.MYSQL_PORT || 3306),
+  port: parseInt(process.env.MYSQL_PORT || '3306'),
   user: process.env.MYSQL_USER,
   password: process.env.MYSQL_PASSWORD,
   database: process.env.MYSQL_DATABASE || 'water_market_db',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  ssl: { rejectUnauthorized: false },
+  ssl: {
+    ca: process.env.MYSQL_SSL_CA,
+    rejectUnauthorized: true,
+  },
 });
 
-// --- LOGIN / REGISTER ---
-app.post('/api/login', async (req, res) => {
-  const { email, password, name, barangay, role } = req.body;
+// ---------- Health Check ----------
+app.get('/api/health', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT * FROM users WHERE email=?', [email]);
-    let user;
-    if (rows.length === 0) {
-      // Register new user
-      const [result] = await pool.query(
-        'INSERT INTO users (name, email, password, barangay, role, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
-        [name || email.split('@')[0], email, password, barangay || 'Panalaron', role || 'customer']
-      );
-      user = { id: result.insertId, name: name || email.split('@')[0], email, role: role || 'customer', barangay: barangay || 'Panalaron' };
-    } else {
-      user = rows[0];
-      if (user.password !== password) return res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
-    return res.json({ success: true, user });
+    const [rows] = await pool.query('SELECT NOW() AS current_time');
+    res.json({ success: true, time: rows[0].current_time });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// --- PRODUCTS ---
+// ---------- Auth / Login ----------
+app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body;
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM users WHERE email=? AND password=?',
+      [username, password]
+    );
+    if (rows.length > 0) res.json({ success: true, user: rows[0] });
+    else res.status(401).json({ success: false, message: 'Invalid credentials' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ---------- Users ----------
+app.get('/api/users', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post('/api/users', async (req, res) => {
+  const { name, email, password, contact_number, barangay, role } = req.body;
+  try {
+    const [result] = await pool.query(
+      `INSERT INTO users (name, email, password, contact_number, barangay, role)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [name, email, password, contact_number, barangay, role]
+    );
+    res.status(201).json({ success: true, userId: result.insertId });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ---------- Products ----------
 app.get('/api/products', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM products ORDER BY name');
@@ -62,11 +91,18 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// --- ORDERS / WALK-IN SALE ---
+// ---------- Orders ----------
 app.get('/api/orders', async (req, res) => {
   try {
-    const [orders] = await pool.query('SELECT * FROM orders ORDER BY created_at DESC');
-    res.json(orders);
+    const [rows] = await pool.query(`
+      SELECT o.id, o.customer_name_manual AS customerName, o.order_type AS type,
+             o.total_amount AS total, o.payment_method AS payment,
+             o.payment_status AS paymentStatus, o.order_status AS status,
+             o.barangay, o.address, o.created_at AS createdAt
+      FROM orders o
+      ORDER BY o.created_at DESC
+    `);
+    res.json(rows);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -76,13 +112,16 @@ app.post('/api/orders', async (req, res) => {
   const { customerName, barangay, address, payment, type, items } = req.body;
   try {
     const [result] = await pool.query(
-      'INSERT INTO orders (customer_name_manual, barangay, address, payment_method, order_type, order_status, payment_status) VALUES (?, ?, ?, ?, ?, "pending", "pending")',
+      `INSERT INTO orders (customer_name_manual, barangay, address, payment_method, order_type, order_status, payment_status)
+       VALUES (?, ?, ?, ?, ?, 'pending', 'pending')`,
       [customerName, barangay, address, payment, type || 'Walk-in']
     );
     const orderId = result.insertId;
+
     for (const item of items) {
       await pool.query(
-        'INSERT INTO order_items (order_id, product_id, quantity, price_at_time) VALUES (?, ?, ?, ?)',
+        `INSERT INTO order_items (order_id, product_id, quantity, price_at_time)
+         VALUES (?, ?, ?, ?)`,
         [orderId, item.productId, item.quantity, item.price]
       );
     }
@@ -92,30 +131,32 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// --- UPDATE ORDER STATUS ---
 app.put('/api/orders/:id', async (req, res) => {
   const { status, paymentStatus } = req.body;
   try {
-    await pool.query('UPDATE orders SET order_status=?, payment_status=? WHERE id=?', [status, paymentStatus, req.params.id]);
+    await pool.query(
+      'UPDATE orders SET order_status=?, payment_status=? WHERE id=?',
+      [status, paymentStatus, req.params.id]
+    );
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// --- React SPA fallback ---
+// ---------- Serve React SPA ----------
 app.use(express.static(path.join(__dirname, 'dist')));
 app.get(/^\/(?!api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// --- Start server ---
+// ---------- Start Server ----------
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   try {
-    await pool.getConnection();
+    await pool.query('SELECT 1');
     console.log('✅ Connected to Aiven MySQL water_market_db');
   } catch (err) {
-    console.error('❌ Failed to connect to MySQL:', err.message);
+    console.error('❌ Could not connect to MySQL:', err.message);
   }
 });
