@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
-import { apiLogin, apiRegister } from "../api/client";
+// src/context/AuthContext.tsx
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { apiLogin, apiRegister } from '../api/client';
 
-export type Role = "admin" | "staff" | "customer";
+export type Role = 'admin' | 'staff' | 'customer';
 
 export interface User {
   id: number;
@@ -14,14 +15,7 @@ export interface User {
 interface AuthContextType {
   user: User | null;
   login: (email: string, password: string) => Promise<boolean>;
-  register: (data: {
-    name: string;
-    email: string;
-    password: string;
-    contact_number: string;
-    barangay: string;
-    role: Role;
-  }) => Promise<boolean>;
+  register: (data: any) => Promise<boolean>;
   logout: () => void;
   isAuthenticated: boolean;
 }
@@ -31,56 +25,43 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
 
-  // Restore user on refresh
+  // Restore user from localStorage
   useEffect(() => {
-    const savedUser = localStorage.getItem("wm_user");
-    if (savedUser) setUser(JSON.parse(savedUser));
+    const storedUser = localStorage.getItem('wm_user');
+    if (storedUser) setUser(JSON.parse(storedUser));
   }, []);
 
-  // Login via backend API
+  // Login
   const login = async (email: string, password: string): Promise<boolean> => {
     try {
       const data = await apiLogin(email, password);
-      if (data?.success) {
-        const loggedInUser: User = {
-          id: data.user.id,
-          name: data.user.name,
-          email: data.user.email,
-          role: data.user.role,
-          barangay: data.user.barangay || "Panalaron",
-        };
-        setUser(loggedInUser);
-        localStorage.setItem("wm_user", JSON.stringify(loggedInUser));
+      if (data?.success && data.user) {
+        setUser(data.user);
+        localStorage.setItem('wm_user', JSON.stringify(data.user));
         return true;
-      } else return false;
+      }
+      return false;
     } catch (err) {
-      console.error("Login failed:", err);
+      console.error(err);
       return false;
     }
   };
 
-  // Register via backend API
-  const register = async (data: {
-    name: string;
-    email: string;
-    password: string;
-    contact_number: string;
-    barangay: string;
-    role: Role;
-  }): Promise<boolean> => {
+  // Register
+  const register = async (data: any): Promise<boolean> => {
     try {
-      const result = await apiRegister(data);
-      if (result?.success) return true;
-      return false;
+      const res = await apiRegister(data);
+      return res?.success ?? false;
     } catch (err) {
-      console.error("Registration failed:", err);
+      console.error(err);
       return false;
     }
   };
 
+  // Logout
   const logout = () => {
     setUser(null);
-    localStorage.removeItem("wm_user");
+    localStorage.removeItem('wm_user');
   };
 
   return (
@@ -92,6 +73,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useAuth = (): AuthContextType => {
   const context = useContext(AuthContext);
-  if (!context) throw new Error("useAuth must be used within an AuthProvider");
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 };
