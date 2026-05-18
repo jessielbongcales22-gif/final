@@ -1,3 +1,4 @@
+// server.js
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -16,15 +17,15 @@ app.use(cors());
 app.use(express.json());
 
 // MySQL pool
-let pool = null;
-function getPool() {
+let pool: mysql.Pool | null = null;
+function getPool(): mysql.Pool {
   if (pool) return pool;
   pool = mysql.createPool({
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT || '3306'),
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME || 'water_market_db',
+    host: process.env.MYSQL_HOST,
+    port: Number(process.env.MYSQL_PORT) || 3306,
+    user: process.env.MYSQL_USER,
+    password: process.env.MYSQL_PASSWORD,
+    database: process.env.MYSQL_DATABASE || 'water_market_db',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
@@ -37,8 +38,8 @@ function getPool() {
 app.get('/api/health', async (req, res) => {
   try {
     const [rows] = await getPool().query('SELECT NOW() AS current_time');
-    res.json({ success: true, time: rows[0].current_time });
-  } catch (err) {
+    res.json({ success: true, time: (rows as any)[0].current_time });
+  } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -47,10 +48,13 @@ app.get('/api/health', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   try {
-    const [rows] = await getPool().query('SELECT * FROM accounts WHERE username=? AND password=?', [username, password]);
-    if (rows.length) res.json({ success: true, user: rows[0] });
-    else res.status(401).json({ success: false, message: 'Invalid credentials' });
-  } catch (err) {
+    const [rows] = await getPool().query('SELECT * FROM customers WHERE email=? AND password=?', [username, password]);
+    if ((rows as any).length) {
+      res.json({ success: true, user: (rows as any)[0] });
+    } else {
+      res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
+  } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -60,7 +64,7 @@ app.get('/api/products', async (req, res) => {
   try {
     const [rows] = await getPool().query('SELECT * FROM products ORDER BY name');
     res.json(rows);
-  } catch (err) {
+  } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -77,7 +81,7 @@ app.get('/api/orders', async (req, res) => {
       ORDER BY o.created_at DESC
     `);
     res.json(orders);
-  } catch (err) {
+  } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -92,7 +96,7 @@ app.post('/api/orders', async (req, res) => {
       [customerName, barangay, address, payment, type || 'Walk-in']
     );
 
-    const orderId = result.insertId;
+    const orderId = (result as any).insertId;
 
     for (const item of items) {
       await getPool().query(
@@ -103,7 +107,7 @@ app.post('/api/orders', async (req, res) => {
     }
 
     res.status(201).json({ success: true, orderId });
-  } catch (err) {
+  } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -112,9 +116,13 @@ app.post('/api/orders', async (req, res) => {
 app.put('/api/orders/:id', async (req, res) => {
   const { status, paymentStatus } = req.body;
   try {
-    await getPool().query('UPDATE orders SET order_status=?, payment_status=? WHERE id=?', [status, paymentStatus, req.params.id]);
+    await getPool().query('UPDATE orders SET order_status=?, payment_status=? WHERE id=?', [
+      status,
+      paymentStatus,
+      req.params.id,
+    ]);
     res.json({ success: true });
-  } catch (err) {
+  } catch (err: any) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -128,6 +136,10 @@ app.get(/^\/(?!api).*/, (req, res) => {
 // Start server
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
-  await getPool();
-  console.log('✅ Connected to Aiven MySQL water_market_db');
+  try {
+    await getPool().getConnection();
+    console.log('✅ Connected to Aiven MySQL water_market_db');
+  } catch (err: any) {
+    console.error('❌ Failed to connect to MySQL:', err.message);
+  }
 });
