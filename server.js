@@ -5,6 +5,8 @@ import dotenv from 'dotenv';
 import mysql from 'mysql2/promise';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
 
 dotenv.config();
 
@@ -14,10 +16,11 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// ---------------- MySQL Pool ----------------
+// Create MySQL pool
 let pool = null;
 function getPool() {
   if (pool) return pool;
@@ -30,12 +33,18 @@ function getPool() {
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    ssl: { rejectUnauthorized: false },
+    ssl: {
+      ca: process.env.MYSQL_SSL_CA, // Must contain the full CA certificate
+      rejectUnauthorized: true,
+    },
   });
   return pool;
 }
 
-// ---------------- Health Check ----------------
+// JWT Secret
+const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+
+// ------------------ HEALTH CHECK ------------------
 app.get('/api/health', async (req, res) => {
   try {
     const [rows] = await getPool().query('SELECT NOW() AS current_time');
@@ -45,39 +54,17 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// ---------------- Login ----------------
-app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body;
-  try {
-    const [rows] = await getPool().query(
-      'SELECT * FROM users WHERE email=? AND password=?',
-      [username, password]
-    );
-
-    if (rows.length) {
-      res.json({ success: true, user: rows[0] });
-    } else {
-      res.status(401).json({ success: false, message: 'Invalid email or password' });
-    }
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ---------------- Register ----------------
+// ------------------ AUTH ------------------
+// Registration
 app.post('/api/register', async (req, res) => {
-  const { full_name, email, password, contact_number, barangay, role } = req.body;
   try {
-    // check if email exists
-    const [existing] = await getPool().query('SELECT * FROM users WHERE email=?', [email]);
-    if (existing.length) {
-      return res.status(400).json({ success: false, message: 'Email already exists' });
-    }
+    const { name, email, password, contact_number, barangay, role } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     const [result] = await getPool().query(
       `INSERT INTO users (name, email, password, contact_number, barangay, role, created_at)
        VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-      [full_name, email, password, contact_number, barangay, role || 'customer']
+      [name, email, hashedPassword, contact_number, barangay, role || 'customer']
     );
 
     res.status(201).json({ success: true, userId: result.insertId });
@@ -86,49 +73,62 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// ---------------- Users ----------------
-app.get('/api/users', async (req, res) => {
+// Login
+app.post('/api/login', async (req, res) => {
   try {
-    const [rows] = await getPool().query('SELECT * FROM users ORDER BY created_at DESC');
-    res.json(rows);
+    const { username, password } = req.body;
+    const [rows] = await getPool().query('SELECT * FROM users WHERE email=?', [username]);
+    if (rows.length === 0) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+
+    const user = rows[0];
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+
+    const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
+
+    res.json({ success: true, user: { id: user.id, name: user.name, email: user.email, role: user.role }, token });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// ---------------- Update User Role ----------------
-app.put('/api/users/:id/role', async (req, res) => {
-  const { role } = req.body;
+// Verify JWT Middleware
+function authMiddleware(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ success: false, message: 'Missing token' });
+
   try {
-    await getPool().query('UPDATE users SET role=? WHERE id=?', [role, req.params.id]);
-    res.json({ success: true });
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload;
+    next();
+  } catch {
+    return res.status(401).json({ success: false, message: 'Invalid token' });
+  }
+}
+
+// ------------------ USERS ------------------
+app.get('/api/users', authMiddleware, async (req, res) => {
+  try {
+    const [users] = await getPool().query('SELECT id, name, email, role, barangay, created_at FROM users');
+    res.json(users);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// ---------------- Delete User ----------------
-app.delete('/api/users/:id', async (req, res) => {
-  try {
-    await getPool().query('DELETE FROM users WHERE id=?', [req.params.id]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ---------------- Products ----------------
+// ------------------ PRODUCTS ------------------
 app.get('/api/products', async (req, res) => {
   try {
-    const [rows] = await getPool().query('SELECT * FROM products ORDER BY name');
-    res.json(rows);
+    const [products] = await getPool().query('SELECT * FROM products ORDER BY name');
+    res.json(products);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// ---------------- Orders ----------------
-app.get('/api/orders', async (req, res) => {
+// ------------------ ORDERS ------------------
+app.get('/api/orders', authMiddleware, async (req, res) => {
   try {
     const [orders] = await getPool().query(`
       SELECT o.id, o.customer_name_manual AS customerName, o.order_type AS type,
@@ -144,10 +144,11 @@ app.get('/api/orders', async (req, res) => {
   }
 });
 
-// ---------------- Add Walk-In Order ----------------
-app.post('/api/orders', async (req, res) => {
-  const { customerName, barangay, address, payment, type, items } = req.body;
+// Add Walk-In Order
+app.post('/api/orders', authMiddleware, async (req, res) => {
   try {
+    const { customerName, barangay, address, payment, type, items } = req.body;
+
     const [result] = await getPool().query(
       `INSERT INTO orders (customer_name_manual, barangay, address, payment_method, order_type, order_status, payment_status)
        VALUES (?, ?, ?, ?, ?, 'pending', 'pending')`,
@@ -170,24 +171,13 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// ---------------- Update order status ----------------
-app.put('/api/orders/:id', async (req, res) => {
-  const { status, paymentStatus } = req.body;
-  try {
-    await getPool().query('UPDATE orders SET order_status=?, payment_status=? WHERE id=?', [status, paymentStatus, req.params.id]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ---------------- Serve React SPA ----------------
+// ------------------ STATIC SPA ------------------
 app.use(express.static(path.join(__dirname, 'dist')));
 app.get(/^\/(?!api).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// ---------------- Start server ----------------
+// ------------------ START SERVER ------------------
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   await getPool();
