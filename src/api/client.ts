@@ -1,14 +1,11 @@
 // src/api/client.ts
 
-// API URL (your backend)
+// Backend API URL
 const API_URL = import.meta.env.VITE_API_URL || 'https://your-backend-domain.com/api';
 
-// Always use API, remove localStorage demo mode
-export const USE_API = true;
-
+// Generic request helper
 async function request(endpoint: string, options: RequestInit = {}) {
   const token = localStorage.getItem('wm_token');
-
   const headers: HeadersInit = { 'Content-Type': 'application/json' };
   if (options.headers) Object.assign(headers, options.headers);
   if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -37,8 +34,11 @@ export const apiRegister = (data: object) =>
 // -------- Users --------
 export const apiGetUsers = () => request('/users');
 export const apiCreateUser = (data: object) => request('/users', { method: 'POST', body: JSON.stringify(data) });
-export const apiUpdateUser = (id: string, data: object) =>
-  request(`/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+
+// **This fixes the build error**
+export const apiUpdateUserRole = (id: string, role: string) =>
+  request(`/users/${id}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
+
 export const apiDeleteUser = (id: string) => request(`/users/${id}`, { method: 'DELETE' });
 
 // -------- Products --------
