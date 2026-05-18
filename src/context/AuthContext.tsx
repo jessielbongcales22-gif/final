@@ -1,7 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '../types';
 
-// API URL from environment
 const API_URL = import.meta.env.VITE_API_URL || 'https://your-backend-url.com/api';
 
 interface AuthContextType {
@@ -24,7 +23,7 @@ async function apiRequest(path: string, body: object) {
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Request failed');
+  if (!res.ok) throw new Error(data.message || 'Request failed');
   return data;
 }
 
@@ -32,46 +31,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
-    // Restore session from localStorage
     const session = localStorage.getItem('wm_user');
     if (session) setUser(JSON.parse(session));
   }, []);
 
-  // LOGIN
-  const login = async (email: string, password: string): Promise<User | null> => {
+  const login = async (email: string, password: string) => {
     try {
       const data = await apiRequest('/login', { email, password });
-      const u: User = { ...data.user, password: '' };
-      setUser(u);
-      localStorage.setItem('wm_user', JSON.stringify(u));
-      localStorage.setItem('wm_token', data.token);
-      return u;
-    } catch (err: unknown) {
+      setUser(data.user);
+      localStorage.setItem('wm_user', JSON.stringify(data.user));
+      return data.user;
+    } catch (err) {
       console.error(err);
       return null;
     }
   };
 
-  // REGISTER
-  const register = async (data: Omit<User, 'id' | 'createdAt'>): Promise<User> => {
-    try {
-      const result = await apiRequest('/register', data);
-      const u: User = { ...result.user, password: '' };
-      setUser(u);
-      localStorage.setItem('wm_user', JSON.stringify(u));
-      localStorage.setItem('wm_token', result.token);
-      return u;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Registration failed';
-      throw new Error(msg);
-    }
+  const register = async (data: Omit<User, 'id' | 'createdAt'>) => {
+    const res = await apiRequest('/register', data);
+    setUser(res.user);
+    localStorage.setItem('wm_user', JSON.stringify(res.user));
+    return res.user;
   };
 
-  // LOGOUT
   const logout = () => {
     setUser(null);
     localStorage.removeItem('wm_user');
-    localStorage.removeItem('wm_token');
   };
 
   return (
