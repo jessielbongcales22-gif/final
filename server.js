@@ -18,6 +18,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// MySQL pool
 let pool = null;
 function getPool() {
   if (pool) return pool;
@@ -37,23 +38,19 @@ function getPool() {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
-app.post('/api/register', async (req, res) => {
+// --------- API Routes ---------
+app.get('/api/health', async (req, res) => {
   try {
-    const { name, email, password, barangay, role } = req.body;
-    const hashed = await bcrypt.hash(password, 10);
-    const [result] = await getPool().query(
-      'INSERT INTO users (name,email,password,barangay,role,created_at) VALUES (?,?,?,?,?,NOW())',
-      [name, email, hashed, barangay, role || 'customer']
-    );
-    res.status(201).json({ success: true, userId: result.insertId });
+    const [rows] = await getPool().query('SELECT NOW() AS current_time');
+    res.json({ success: true, time: rows[0].current_time });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body;
   try {
-    const { username, password } = req.body;
     const [rows] = await getPool().query('SELECT * FROM users WHERE email=?', [username]);
     if (!rows.length) return res.status(401).json({ success: false, message: 'Invalid credentials' });
 
@@ -68,13 +65,19 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// --------- SPA Serve ---------
+// Serve static files
 app.use(express.static(path.join(__dirname, 'dist')));
+
+// Catch-all route for React Router
+// MUST be app.get('*') AFTER all API routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
+// --------- Start Server ---------
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   await getPool();
-  console.log('✅ Connected to Aiven MySQL water_market_db');
+  console.log('✅ Connected to MySQL / Aiven DB');
 });
